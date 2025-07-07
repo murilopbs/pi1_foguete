@@ -12,27 +12,27 @@ Adafruit_BMP280 bmp;
 // Bluetooth
 BluetoothSerial SerialBT;
 
-// Estados do sistema
+// Enum para saber o estado do foggeute
 enum Estado { AGUARDANDO_LANCAMENTO, EM_VOO, POUSO_DETECTADO };
 Estado estado = AGUARDANDO_LANCAMENTO;
 
 // Parâmetros de detecção (ajustados com base nos testes reais)
-const float ACEL_LANCAMENTO = 15.0;    // 1.5G para detectar lançamento
-const float ACEL_QUEDA = 7.0;          // Limiar para considerar queda livre
-const float ACEL_IMPACTO = 25.0;       // Limiar para detectar pouso/impacto
-const unsigned long TEMPO_QUEDA_MINIMO = 300; // Tempo mínimo em queda (ms)
+const float ACEL_LANCAMENTO = 15.0;    // 1.5G para detectar lançamento com a força da explosao inicial
+const float ACEL_QUEDA = 7.0;          // Valor para ver se o foguete está em queda livre (talvez nem use)
+const float ACEL_IMPACTO = 25.0;       // Valor para saber se pousou (de acordo com a força da queda)
+const unsigned long TEMPO_QUEDA_MINIMO = 300; // Tempo mínimo em queda (ms) (talvez nem use)
 
 // Armazenamento de dados
 const int MAX_DADOS = 1000;            // Capacidade máxima de armazenamento
-String dadosVoo[MAX_DADOS];            // Array para armazenar os dados
+String dadosVoo[MAX_DADOS];            // Array de dados dos sensores durante o voo
 int totalDados = 0;                    // Contador de dados armazenados
 
-// Variáveis de tempo e controle
+// Variáveis de tempo e controle (talvez nem seja necessário)
 unsigned long tempoDecolagem = 0;
 unsigned long inicioQueda = 0;
 bool emQuedaLivre = false;
 
-// Estrutura para calibração
+// Struct para a calibração
 struct {
   float ax, ay, az;
 } calibracao;
@@ -50,13 +50,13 @@ void setup() {
   }
   accel.setRange(ADXL345_RANGE_16_G);
 
-  // Inicializa barômetro
+  // Inicializa a altitude
   if (!bmp.begin(0x76)) {
     Serial.println("❌ BMP280 não encontrado!");
     while (1);
   }
 
-  // Calibração inicial (sensor deve estar em repouso)
+  // Calibração inicial (nao movimentar os sensores)
   calibrarSensor();
   
   Serial.println("✅ Sistema pronto. Detectando lançamento...");
@@ -67,13 +67,12 @@ void loop() {
   sensors_event_t evento;
   accel.getEvent(&evento);
   
-  // Calcula aceleração total (com compensação de gravidade)
+  // Calcula aceleração total
   float ax = evento.acceleration.x - calibracao.ax;
   float ay = evento.acceleration.y - calibracao.ay;
   float az = evento.acceleration.z - calibracao.az;
   float aTotal = sqrt(ax*ax + ay*ay + az*az);
 
-  // Máquina de estados principal
   switch (estado) {
     case AGUARDANDO_LANCAMENTO:
       if (aTotal > ACEL_LANCAMENTO) {
@@ -90,15 +89,15 @@ void loop() {
       break;
   }
 
-  delay(20); // Taxa de amostragem ~50Hz
+  delay(20); // Tempo para não bugar as leituras
 }
 
-// Função para calibração do sensor
+// Calibrar o acelerometro de acordo com a posição do bixin
 void calibrarSensor() {
   sensors_event_t evento;
   accel.getEvent(&evento);
   
-  // Média de 10 leituras para calibração
+  // Média de 10 leituras para calibração do acelerometro
   calibracao.ax = calibracao.ay = calibracao.az = 0;
   for (int i = 0; i < 10; i++) {
     accel.getEvent(&evento);
@@ -122,7 +121,7 @@ void iniciarVoo() {
   estado = EM_VOO;
   tempoDecolagem = millis();
   SerialBT.end(); // Desliga Bluetooth durante o voo
-  Serial.println("🚀 LANÇAMENTO DETECTADO! Iniciando coleta de dados...");
+  Serial.println("LANÇAMENTO DETECTADO! Iniciando coleta de dados...");
   
   // Armazena o primeiro ponto de dados
   if (totalDados < MAX_DADOS) {
@@ -139,8 +138,8 @@ void monitorarVoo(float aTotal) {
 
   if (aTotal > ACEL_IMPACTO) {
     estado = POUSO_DETECTADO;
-    SerialBT.begin("ESP32_Foguete"); // Reativa Bluetooth
-    Serial.println("🪂 POUSO DETECTADO! Aguardando conexão para envio de dados.");
+    SerialBT.begin("ESP32_Foguete"); // Detectou o pouso e ativa o bluetooth
+    Serial.println("POUSO DETECTADO! Aguardando conexão para envio de dados.");
   }
   delay(100);
 }
@@ -173,12 +172,12 @@ String gerarJsonDados() {
 }
 
 void enviarDadosArmazenados() {
-  Serial.println("📤 Enviando dados armazenados...");
+  Serial.println("Enviando dados armazenados...");
   for (int i = 0; i < totalDados; i++) {
     SerialBT.println(dadosVoo[i]);
     delay(5); // Espaço entre envios
   }
-  SerialBT.println("{\"fim\":true}"); // Sinaliza fim dos dados
-  Serial.println("✅ Dados enviados! Total: " + String(totalDados) + " registros.");
+  SerialBT.println("{\"fim\":true}"); // Finaliza o envio
+  Serial.println("Dados enviados! Total: " + String(totalDados) + " registros.");
   totalDados = 0; // Reseta o contador
 }
