@@ -22,10 +22,13 @@ File logFile;
 enum Estado { AGUARDANDO_LANCAMENTO, EM_VOO, POUSO_DETECTADO };
 Estado estado = AGUARDANDO_LANCAMENTO;
 
+// LED
+#define LED 2
+
 // Parâmetros de detecção
 const float ACEL_LANCAMENTO = 15.0;    
-const float ACEL_IMPACTO = 25.0;       
-const int INTERVALO_COLETA = 100;      
+const float ACEL_IMPACTO = 9.0;       
+const int INTERVALO_COLETA = 200;      
 
 // Tempo
 unsigned long tempoDecolagem = 0;
@@ -36,25 +39,42 @@ struct {
 } calibracao;
 
 void setup() {
+  pinMode(LED, OUTPUT);
   Serial.begin(115200);
   SerialBT.begin("ESP32_Foguete");
+  digitalWrite(LED, HIGH);
 
   Wire.begin(21, 22); // I2C ESP32
 
+  if (!bmp.begin(0x76)) {
+    Serial.println("❌ BMP280 não encontrado!");
+    while (1){
+      digitalWrite(LED, LOW);
+      delay(1000);
+      digitalWrite(LED, HIGH);
+      delay(1000);
+    }
+  }
+
   if (!accel.begin()) {
     Serial.println("❌ ADXL345 não encontrado!");
-    while (1);
+    while (1){
+      digitalWrite(LED, LOW);
+      delay(1000);
+      digitalWrite(LED, HIGH);
+      delay(1000);
+    }
   }
   accel.setRange(ADXL345_RANGE_16_G);
 
-  if (!bmp.begin(0x76)) {
-    Serial.println("❌ BMP280 não encontrado!");
-    while (1);
-  }
-
   if (!SD.begin(PIN_SD_CS)) {
     Serial.println("❌ Cartão SD não encontrado!");
-    while (1);
+    while (1){
+      digitalWrite(LED, LOW);
+      delay(1000);
+      digitalWrite(LED, HIGH);
+      delay(1000);
+    }
   }
 
   calibrarSensor();
@@ -71,7 +91,9 @@ void loop() {
   float aTotal = sqrt(ax*ax + ay*ay + az*az);
 
   switch (estado) {
-    case AGUARDANDO_LANCAMENTO:
+    case AGUARDANDO_LANCAMENTO: //adicionar estados do led pra todos os cases
+      digitalWrite(LED, HIGH);
+      Serial.println(aTotal);
       if (aTotal > ACEL_LANCAMENTO) {
         iniciarVoo();
       }
@@ -123,6 +145,7 @@ void iniciarVoo() {
 }
 
 void monitorarVoo(float aTotal) {
+  digitalWrite(LED, LOW);
   String json = gerarJsonDados();
 
   if (logFile) {
@@ -144,6 +167,8 @@ void monitorarVoo(float aTotal) {
     }
   }
 
+  delay(INTERVALO_COLETA);
+  digitalWrite(LED, HIGH);
   delay(INTERVALO_COLETA);
 }
 
@@ -189,7 +214,7 @@ void enviarDadosDoCartaoSD() {
     if (linha.length() == 0) continue;
 
     SerialBT.println(linha);
-    delay(5);
+    delay(20);
   }
 
   f.close();
