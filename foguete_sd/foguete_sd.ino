@@ -6,7 +6,14 @@
 #include <ArduinoJson.h>
 #include <SD.h>
 #include <SPI.h>
-#include <TinyGPSPlus.h>
+#include <TinyGPS++.h>
+
+// VOLTAGEM
+#define VOLT_PIN 36
+#define REF_VOLTAGE 9
+#define R1 30000
+#define R2 7500
+#define ADC_RESOLUTION 4096.0
 
 // Sensores
 Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified(12345);
@@ -21,8 +28,11 @@ bool sdDisponivel = false;
 char nomeArquivo[20] = "/voo.txt"; // nome do arquivo atual
 
 // GPS
-HardwareSerial GPS(2); // UART2 (RX=16, TX=17)
+#define GPS_BAUD 9600
+#define RXD2 16
+#define TXD2 17
 TinyGPSPlus gps;
+HardwareSerial gpsSerial(2); // UART2 (RX=16, TX=17)
 
 // Enum para o estado do foguete
 enum Estado { AGUARDANDO_LANCAMENTO, EM_VOO, POUSO_DETECTADO };
@@ -51,7 +61,7 @@ void setup() {
   digitalWrite(LED, HIGH);
 
   Wire.begin(21, 22); // I2C ESP32
-  GPS.begin(115200, SERIAL_8N1, 16, 17); // GPS RX/TX
+  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, RXD2, TXD2);
 
   // Inicializa sensores
   if (!bmp.begin(0x76)) {
@@ -97,15 +107,12 @@ void loop() {
   float az = evento.acceleration.z - calibracao.az;
   float aTotal = sqrt(ax * ax + ay * ay + az * az);
 
-  while (GPS.available()) {
-    gps.encode(GPS.read());
-  }
-
   switch (estado) {
     case AGUARDANDO_LANCAMENTO:
       digitalWrite(LED, HIGH);
       //Serial.println(aTotal);
       if (SerialBT.available() && SerialBT.read() == 'b') {
+        Serial.println("Aqui");
         enviarDadosTodosOsVoos();
       }
       if (aTotal > ACEL_LANCAMENTO) {
@@ -294,18 +301,26 @@ String gerarJsonDados() {
     doc["az"].as<float>() * doc["az"].as<float>()
   );
 
-  if (gps.location.isValid()) {
-    doc["lat"] = gps.location.lat();
-    doc["lng"] = gps.location.lng();
+  if(gpsSerial.available()){
+    gps.encode(gpsSerial.read());
+    if (gps.location.isValid()) {
+      doc["lat"] = gps.location.lat();
+      doc["lng"] = gps.location.lng();
+    }
+
+    if (gps.altitude.isValid()) {
+      doc["gpsAlt"] = gps.altitude.meters();
+    }
+
+    if (gps.speed.isValid()) {
+      doc["vel"] = gps.speed.kmph();
+    }
   }
 
-  if (gps.altitude.isValid()) {
-    doc["gpsAlt"] = gps.altitude.meters();
-  }
-
-  if (gps.speed.isValid()) {
-    doc["vel"] = gps.speed.kmph();
-  }
+  int volt = analogRead(36);
+  double voltage = map(volt,0, 4096, 0, 1650);
+  voltage /= 100;
+  doc["volt"] = voltage;
 
   String json;
   serializeJson(doc, json);
