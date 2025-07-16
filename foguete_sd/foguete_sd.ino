@@ -6,6 +6,7 @@
 #include <ArduinoJson.h>
 #include <SD.h>
 #include <SPI.h>
+#include <TinyGPSPlus.h>
 
 // Sensores
 Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified(12345);
@@ -16,7 +17,11 @@ BluetoothSerial SerialBT;
 
 // SD
 #define PIN_SD_CS 5
-File logFile;
+bool sdDisponivel = false;
+
+// GPS
+HardwareSerial GPS(2); // UART2 (RX=16, TX=17)
+TinyGPSPlus gps;
 
 // Enum para o estado do foguete
 enum Estado { AGUARDANDO_LANCAMENTO, EM_VOO, POUSO_DETECTADO };
@@ -26,9 +31,9 @@ Estado estado = AGUARDANDO_LANCAMENTO;
 #define LED 2
 
 // Parâmetros de detecção
-const float ACEL_LANCAMENTO = 15.0;    
-const float ACEL_IMPACTO = 9.0;       
-const int INTERVALO_COLETA = 200;      
+const float ACEL_LANCAMENTO = 15.0;
+const float ACEL_IMPACTO = 9.0;
+const int INTERVALO_COLETA = 200;
 
 // Tempo
 unsigned long tempoDecolagem = 0;
@@ -45,40 +50,41 @@ void setup() {
   digitalWrite(LED, HIGH);
 
   Wire.begin(21, 22); // I2C ESP32
+  GPS.begin(115200, SERIAL_8N1, 16, 17); // GPS RX/TX
 
+  // Inicializa sensores
   if (!bmp.begin(0x76)) {
     Serial.println("❌ BMP280 não encontrado!");
-    while (1){
-      digitalWrite(LED, LOW);
-      delay(1000);
-      digitalWrite(LED, HIGH);
-      delay(1000);
-    }
+    piscarErro();
   }
 
   if (!accel.begin()) {
     Serial.println("❌ ADXL345 não encontrado!");
-    while (1){
-      digitalWrite(LED, LOW);
-      delay(1000);
-      digitalWrite(LED, HIGH);
-      delay(1000);
-    }
+    piscarErro();
   }
   accel.setRange(ADXL345_RANGE_16_G);
 
-  if (!SD.begin(PIN_SD_CS)) {
-    Serial.println("❌ Cartão SD não encontrado!");
-    while (1){
-      digitalWrite(LED, LOW);
-      delay(1000);
-      digitalWrite(LED, HIGH);
-      delay(1000);
-    }
+  // Inicializa SD Card com tentativas de recuperação
+  if (!inicializarSD()) {
+    Serial.println("❌ Falha ao inicializar SD Card!");
+    piscarErro();
+  } else {
+    sdDisponivel = true;
+    Serial.println("✅ SD Card inicializado com sucesso");
   }
 
   calibrarSensor();
   Serial.println("✅ Sistema pronto. Aguardando lançamento...");
+}
+
+bool inicializarSD() {
+  for (int tentativa = 0; tentativa < 3; tentativa++) {
+    if (SD.begin(PIN_SD_CS)) {
+      return true;
+    }
+    delay(500);
+  }
+  return false;
 }
 
 void loop() {
@@ -88,10 +94,15 @@ void loop() {
   float ax = evento.acceleration.x - calibracao.ax;
   float ay = evento.acceleration.y - calibracao.ay;
   float az = evento.acceleration.z - calibracao.az;
-  float aTotal = sqrt(ax*ax + ay*ay + az*az);
+  float aTotal = sqrt(ax * ax + ay * ay + az * az);
+
+  // Lê e decodifica os dados do GPS
+  while (GPS.available()) {
+    gps.encode(GPS.read());
+  }
 
   switch (estado) {
-    case AGUARDANDO_LANCAMENTO: //adicionar estados do led pra todos os cases
+    case AGUARDANDO_LANCAMENTO:
       digitalWrite(LED, HIGH);
       Serial.println(aTotal);
       if (aTotal > ACEL_LANCAMENTO) {
@@ -136,11 +147,22 @@ void iniciarVoo() {
   SerialBT.end(); // Desliga o Bluetooth
   Serial.println("LANÇAMENTO DETECTADO!");
 
-  logFile = SD.open("/voo.txt", FILE_WRITE);
-  if (logFile) {
-    logFile.println("[");
-  } else {
-    Serial.println("Falha ao abrir o arquivo voo.txt");
+  if (sdDisponivel) {
+    // Remove arquivo existente se houver
+    if (SD.exists("/voo.txt")) {
+      SD.remove("/voo.txt");
+    }
+
+    // Abre arquivo para escrita
+    File logFile = SD.open("/voo.txt", FILE_WRITE);
+    if (logFile) {
+      logFile.println("[");
+      logFile.close();
+      Serial.println("Arquivo de log iniciado");
+    } else {
+      Serial.println("Falha ao abrir o arquivo voo.txt");
+      sdDisponivel = false;
+    }
   }
 }
 
@@ -148,28 +170,43 @@ void monitorarVoo(float aTotal) {
   digitalWrite(LED, LOW);
   String json = gerarJsonDados();
 
-  if (logFile) {
-    logFile.println(json + ",");
+  if (sdDisponivel) {
+    File logFile = SD.open("/voo.txt", FILE_APPEND);
+    if (logFile) {
+      logFile.println(json);
+      logFile.close(); // Fecha o arquivo após cada escrita
+    } else {
+      Serial.println("Erro ao abrir arquivo para escrita");
+      sdDisponivel = false;
+    }
   }
 
   Serial.println(json);
 
   if (aTotal > ACEL_IMPACTO) {
     estado = POUSO_DETECTADO;
+    finalizarGravacao();
     SerialBT.begin("ESP32_Foguete");
     Serial.println("POUSO DETECTADO. Aguardando comando para enviar dados...");
-
-    if (logFile) {
-      logFile.seek(logFile.position() - 2); // Remove vírgula da última linha para o json
-      logFile.println();
-      logFile.println("]");
-      logFile.close();
-    }
   }
 
   delay(INTERVALO_COLETA);
   digitalWrite(LED, HIGH);
   delay(INTERVALO_COLETA);
+}
+
+void finalizarGravacao() {
+  if (sdDisponivel) {
+    File logFile = SD.open("/voo.txt", FILE_APPEND);
+    if (logFile) {
+      // Remove a última vírgula se existir
+      logFile.seek(logFile.position() - 2);
+      logFile.println();
+      logFile.println("]");
+      logFile.close();
+      Serial.println("Gravação finalizada com sucesso");
+    }
+  }
 }
 
 void aguardarConexaoBluetooth() {
@@ -182,7 +219,7 @@ String gerarJsonDados() {
   sensors_event_t evento;
   accel.getEvent(&evento);
 
-  StaticJsonDocument<200> doc;
+  StaticJsonDocument<300> doc;
   doc["t"] = millis() - tempoDecolagem;
   doc["ax"] = evento.acceleration.x - calibracao.ax;
   doc["ay"] = evento.acceleration.y - calibracao.ay;
@@ -194,6 +231,19 @@ String gerarJsonDados() {
     doc["az"].as<float>() * doc["az"].as<float>()
   );
 
+  if (gps.location.isValid()) {
+    doc["lat"] = gps.location.lat();
+    doc["lng"] = gps.location.lng();
+  }
+
+  if (gps.altitude.isValid()) {
+    doc["gpsAlt"] = gps.altitude.meters();
+  }
+
+  if (gps.speed.isValid()) {
+    doc["vel"] = gps.speed.kmph();
+  }
+
   String json;
   serializeJson(doc, json);
   return json;
@@ -201,6 +251,11 @@ String gerarJsonDados() {
 
 void enviarDadosDoCartaoSD() {
   Serial.println("Enviando dados do voo.txt...");
+
+  if (!sdDisponivel) {
+    SerialBT.println("{\"erro\": \"SD Card não disponível\"}");
+    return;
+  }
 
   File f = SD.open("/voo.txt");
   if (!f) {
@@ -212,12 +267,19 @@ void enviarDadosDoCartaoSD() {
     String linha = f.readStringUntil('\n');
     linha.trim();
     if (linha.length() == 0) continue;
-
     SerialBT.println(linha);
-    delay(20);
+    delay(5); // Pequeno delay para evitar sobrecarga no Bluetooth
   }
 
   f.close();
-  SerialBT.println("{\"fim\": true}");
   Serial.println("Envio completo.");
+}
+
+void piscarErro() {
+  while (true) {
+    digitalWrite(LED, LOW);
+    delay(500);
+    digitalWrite(LED, HIGH);
+    delay(500);
+  }
 }
