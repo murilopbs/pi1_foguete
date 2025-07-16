@@ -1,10 +1,12 @@
 import 'dart:convert';
-import 'dart:math';
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'dart:typed_data';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 void main() => runApp(MaterialApp(home: BluetoothApp()));
 
@@ -43,6 +45,8 @@ class _BluetoothAppState extends State<BluetoothApp> {
     await Permission.bluetoothConnect.request();
     await Permission.bluetoothScan.request();
     await Permission.location.request();
+    await Permission.storage.request();
+    await Permission.manageExternalStorage.request();
   }
 
   void _connectToDevice() async {
@@ -75,7 +79,6 @@ class _BluetoothAppState extends State<BluetoothApp> {
       buffer = buffer.substring(index + 1);
 
       if (linha.isEmpty) continue;
-      if(linha.contains(']') || linha.contains('[')) continue;
 
       try {
         final json = jsonDecode(linha);
@@ -88,10 +91,8 @@ class _BluetoothAppState extends State<BluetoothApp> {
           }
 
           if (!isReceivingAllFlights) {
-            // Se não está no modo de receber todos os voos, mostra os dados do único voo
             setState(() {});
           } else if (json['fim'] == true && currentFlight == null) {
-            // Terminou de receber todos os voos
             setState(() {
               status = 'Todos os voos recebidos!';
               _showFlightsList();
@@ -103,7 +104,6 @@ class _BluetoothAppState extends State<BluetoothApp> {
         final t = (json['t'] ?? 0).toDouble() / 1000;
 
         if (!isReceivingAllFlights) {
-          // Modo de receber um único voo
           setState(() {
             axData.add(FlSpot(t, (json['ax'] ?? 0).toDouble()));
             ayData.add(FlSpot(t, (json['ay'] ?? 0).toDouble()));
@@ -112,7 +112,6 @@ class _BluetoothAppState extends State<BluetoothApp> {
             aTotalData.add(FlSpot(t, (json['a'] ?? 0).toDouble()));
           });
         } else {
-          // Modo de receber múltiplos voos
           if (currentFlight == null) {
             currentFlight = FlightData(
               name: 'Voo ${allFlights.length + 1}',
@@ -320,6 +319,43 @@ class FlightDetailsScreen extends StatelessWidget {
 
   const FlightDetailsScreen({Key? key, required this.flight}) : super(key: key);
 
+  Future<void> _exportFlightData() async {
+    try {
+      String csvContent = "Tempo(ms),Aceleração X(g),Aceleração Y(g),Aceleração Z(g),Aceleração Total(g),Altitude(m)\n";
+      
+      int maxLength = flight.axData.length;
+      if (flight.ayData.length != maxLength || 
+          flight.azData.length != maxLength || 
+          flight.aTotalData.length != maxLength || 
+          flight.altData.length != maxLength) {
+        throw Exception("Os dados do voo têm tamanhos inconsistentes");
+      }
+      
+      for (int i = 0; i < maxLength; i++) {
+        csvContent += "${(flight.axData[i].x * 1000).toStringAsFixed(0)},"
+                     "${flight.axData[i].y.toStringAsFixed(6)},"
+                     "${flight.ayData[i].y.toStringAsFixed(6)},"
+                     "${flight.azData[i].y.toStringAsFixed(6)},"
+                     "${flight.aTotalData[i].y.toStringAsFixed(6)},"
+                     "${flight.altData[i].y.toStringAsFixed(2)}\n";
+      }
+      
+      final directory = await getTemporaryDirectory();
+      final file = File('${directory.path}/${flight.name}_dados.csv');
+      
+      await file.writeAsString(csvContent);
+      
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'Dados do ${flight.name}',
+        subject: 'Dados do voo do foguete',
+      );
+      
+    } catch (e) {
+      print("Erro ao exportar dados: $e");
+    }
+  }
+
   Widget _buildGraph(String label, List<FlSpot> data, Color cor, String yAxisLabel) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -376,7 +412,16 @@ class FlightDetailsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(flight.name)),
+      appBar: AppBar(
+        title: Text(flight.name),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.share),
+            onPressed: _exportFlightData,
+            tooltip: 'Exportar dados',
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: ListView(
