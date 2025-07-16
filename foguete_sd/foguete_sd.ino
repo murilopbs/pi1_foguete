@@ -18,6 +18,7 @@ BluetoothSerial SerialBT;
 // SD
 #define PIN_SD_CS 5
 bool sdDisponivel = false;
+char nomeArquivo[20] = "/voo.txt"; // nome do arquivo atual
 
 // GPS
 HardwareSerial GPS(2); // UART2 (RX=16, TX=17)
@@ -96,7 +97,6 @@ void loop() {
   float az = evento.acceleration.z - calibracao.az;
   float aTotal = sqrt(ax * ax + ay * ay + az * az);
 
-  // Lê e decodifica os dados do GPS
   while (GPS.available()) {
     gps.encode(GPS.read());
   }
@@ -104,7 +104,10 @@ void loop() {
   switch (estado) {
     case AGUARDANDO_LANCAMENTO:
       digitalWrite(LED, HIGH);
-      Serial.println(aTotal);
+      //Serial.println(aTotal);
+      if (SerialBT.available() && SerialBT.read() == 'b') {
+        enviarDadosTodosOsVoos();
+      }
       if (aTotal > ACEL_LANCAMENTO) {
         iniciarVoo();
       }
@@ -141,6 +144,65 @@ void calibrarSensor() {
   Serial.println("Calibração concluída.");
 }
 
+int obterProximoNumeroArquivo() {
+  int n = 1;
+  char nome[20];
+
+  while (true) {
+    sprintf(nome, "/voo%d.txt", n);
+    if (!SD.exists(nome)) {
+      return n;
+    }
+    n++;
+  }
+}
+
+void enviarDadosTodosOsVoos(){
+  int n = 2;
+  char nome[20];
+
+  while (true){
+    sprintf(nome, "/voo%d.txt", n);
+    if(!SD.exists(nome)){
+      return;
+    }
+    Serial.println("Enviando dados de " + String(nome));
+
+    if (!sdDisponivel) {
+      SerialBT.println("{\"erro\": \"SD Card não disponível\"}");
+      return;
+    }
+
+    File f = SD.open(nome);
+    if (!f) {
+      SerialBT.println("{\"erro\": \"Arquivo não encontrado\"}");
+      return;
+    }
+
+    while (f.available()) {
+      String linha = f.readStringUntil('\n');
+      linha.trim();
+      if (linha.length() == 0) continue;
+      if(linha[0] != '[' || linha[0] != ']')
+        SerialBT.println(linha);
+      delay(5);
+    }
+
+    f.close();
+    Serial.print("Envio completo: ");
+    Serial.println(nome);
+    sprintf(nome, "/voo%d.txt", n + 1);
+    if(!SD.exists(nome)){
+      SerialBT.println("{\"fim\": true}");
+      return;
+    }else{
+      SerialBT.println("{\"fim\": false}");
+    }
+    n++;
+    //return; //depois tirar essa porra
+  }
+}
+
 void iniciarVoo() {
   estado = EM_VOO;
   tempoDecolagem = millis();
@@ -148,19 +210,16 @@ void iniciarVoo() {
   Serial.println("LANÇAMENTO DETECTADO!");
 
   if (sdDisponivel) {
-    // Remove arquivo existente se houver
-    if (SD.exists("/voo.txt")) {
-      SD.remove("/voo.txt");
-    }
+    int numero = obterProximoNumeroArquivo();
+    sprintf(nomeArquivo, "/voo%d.txt", numero);
 
-    // Abre arquivo para escrita
-    File logFile = SD.open("/voo.txt", FILE_WRITE);
+    File logFile = SD.open(nomeArquivo, FILE_WRITE);
     if (logFile) {
       logFile.println("[");
       logFile.close();
-      Serial.println("Arquivo de log iniciado");
+      Serial.println("Arquivo de log iniciado: " + String(nomeArquivo));
     } else {
-      Serial.println("Falha ao abrir o arquivo voo.txt");
+      Serial.println("Falha ao abrir o arquivo de log");
       sdDisponivel = false;
     }
   }
@@ -171,10 +230,10 @@ void monitorarVoo(float aTotal) {
   String json = gerarJsonDados();
 
   if (sdDisponivel) {
-    File logFile = SD.open("/voo.txt", FILE_APPEND);
+    File logFile = SD.open(nomeArquivo, FILE_APPEND);
     if (logFile) {
       logFile.println(json);
-      logFile.close(); // Fecha o arquivo após cada escrita
+      logFile.close();
     } else {
       Serial.println("Erro ao abrir arquivo para escrita");
       sdDisponivel = false;
@@ -197,10 +256,12 @@ void monitorarVoo(float aTotal) {
 
 void finalizarGravacao() {
   if (sdDisponivel) {
-    File logFile = SD.open("/voo.txt", FILE_APPEND);
+    File logFile = SD.open(nomeArquivo, FILE_APPEND);
     if (logFile) {
-      // Remove a última vírgula se existir
-      logFile.seek(logFile.position() - 2);
+      long pos = logFile.position();
+      if (pos >= 2) {
+        logFile.seek(pos - 2);
+      }
       logFile.println();
       logFile.println("]");
       logFile.close();
@@ -212,6 +273,8 @@ void finalizarGravacao() {
 void aguardarConexaoBluetooth() {
   if (SerialBT.available() && SerialBT.read() == 'a') {
     enviarDadosDoCartaoSD();
+    estado = AGUARDANDO_LANCAMENTO;
+    Serial.println("Sistema pronto para novo lançamento");
   }
 }
 
@@ -250,16 +313,16 @@ String gerarJsonDados() {
 }
 
 void enviarDadosDoCartaoSD() {
-  Serial.println("Enviando dados do voo.txt...");
+  Serial.println("Enviando dados de " + String(nomeArquivo));
 
   if (!sdDisponivel) {
     SerialBT.println("{\"erro\": \"SD Card não disponível\"}");
     return;
   }
 
-  File f = SD.open("/voo.txt");
+  File f = SD.open(nomeArquivo);
   if (!f) {
-    SerialBT.println("{\"erro\": \"voo.txt não encontrado\"}");
+    SerialBT.println("{\"erro\": \"Arquivo não encontrado\"}");
     return;
   }
 
@@ -268,10 +331,11 @@ void enviarDadosDoCartaoSD() {
     linha.trim();
     if (linha.length() == 0) continue;
     SerialBT.println(linha);
-    delay(5); // Pequeno delay para evitar sobrecarga no Bluetooth
+    delay(5);
   }
 
   f.close();
+  SerialBT.println("{\"fim\": true}");
   Serial.println("Envio completo.");
 }
 
