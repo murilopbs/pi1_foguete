@@ -20,15 +20,22 @@ class _BluetoothAppState extends State<BluetoothApp> {
   String status = 'Desconectado';
   String buffer = '';
 
+  // Dados para o voo atual
   final List<FlSpot> axData = [];
   final List<FlSpot> ayData = [];
   final List<FlSpot> azData = [];
   final List<FlSpot> altData = [];
   final List<FlSpot> aTotalData = [];
+  final List<FlSpot> voltData = [];
+  final List<FlSpot> latData = [];
+  final List<FlSpot> lngData = [];
+  final List<FlSpot> gpsAltData = [];
+  final List<FlSpot> velData = [];
 
   List<FlightData> allFlights = [];
   bool isReceivingAllFlights = false;
   FlightData? currentFlight;
+  bool hasGpsData = false;
 
   @override
   void initState() {
@@ -102,6 +109,7 @@ class _BluetoothAppState extends State<BluetoothApp> {
         }
 
         final t = (json['t'] ?? 0).toDouble() / 1000;
+        final hasGps = json.containsKey('lat') && json.containsKey('lng');
 
         if (!isReceivingAllFlights) {
           setState(() {
@@ -110,6 +118,15 @@ class _BluetoothAppState extends State<BluetoothApp> {
             azData.add(FlSpot(t, (json['az'] ?? 0).toDouble()));
             altData.add(FlSpot(t, (json['alt'] ?? 0).toDouble()));
             aTotalData.add(FlSpot(t, (json['a'] ?? 0).toDouble()));
+            voltData.add(FlSpot(t, (json['volt'] ?? 0).toDouble()));
+            
+            if (hasGps) {
+              latData.add(FlSpot(t, (json['lat'] ?? 0).toDouble()));
+              lngData.add(FlSpot(t, (json['lng'] ?? 0).toDouble()));
+              gpsAltData.add(FlSpot(t, (json['gpsAlt'] ?? 0).toDouble()));
+              velData.add(FlSpot(t, (json['vel'] ?? 0).toDouble()));
+              hasGpsData = true;
+            }
           });
         } else {
           if (currentFlight == null) {
@@ -120,6 +137,12 @@ class _BluetoothAppState extends State<BluetoothApp> {
               azData: [],
               altData: [],
               aTotalData: [],
+              voltData: [],
+              latData: [],
+              lngData: [],
+              gpsAltData: [],
+              velData: [],
+              hasGpsData: false,
             );
           }
 
@@ -128,6 +151,15 @@ class _BluetoothAppState extends State<BluetoothApp> {
           currentFlight!.azData.add(FlSpot(t, (json['az'] ?? 0).toDouble()));
           currentFlight!.altData.add(FlSpot(t, (json['alt'] ?? 0).toDouble()));
           currentFlight!.aTotalData.add(FlSpot(t, (json['a'] ?? 0).toDouble()));
+          currentFlight!.voltData.add(FlSpot(t, (json['volt'] ?? 0).toDouble()));
+          
+          if (hasGps) {
+            currentFlight!.latData.add(FlSpot(t, (json['lat'] ?? 0).toDouble()));
+            currentFlight!.lngData.add(FlSpot(t, (json['lng'] ?? 0).toDouble()));
+            currentFlight!.gpsAltData.add(FlSpot(t, (json['gpsAlt'] ?? 0).toDouble()));
+            currentFlight!.velData.add(FlSpot(t, (json['vel'] ?? 0).toDouble()));
+            currentFlight!.hasGpsData = true;
+          }
         }
       } catch (e) {
         print("Erro ao processar dados: $e");
@@ -146,6 +178,12 @@ class _BluetoothAppState extends State<BluetoothApp> {
           azData.clear();
           altData.clear();
           aTotalData.clear();
+          voltData.clear();
+          latData.clear();
+          lngData.clear();
+          gpsAltData.clear();
+          velData.clear();
+          hasGpsData = false;
           status = 'Recebendo dados do voo atual...';
         });
         connection!.output.add(utf8.encode(comando));
@@ -256,6 +294,13 @@ class _BluetoothAppState extends State<BluetoothApp> {
                   _buildGraph('Aceleração no eixo Z', azData, Colors.green, 'Aceleração (g)'),
                   _buildGraph('Aceleração Total', aTotalData, Colors.purple, 'Aceleração (g)'),
                   _buildGraph('Altitude', altData, Colors.orange, 'Altitude (m)'),
+                  _buildGraph('Voltagem', voltData, Colors.brown, 'Voltagem (V)'),
+                  if (hasGpsData) ...[
+                    _buildGraph('Latitude', latData, Colors.pink, 'Latitude'),
+                    _buildGraph('Longitude', lngData, Colors.teal, 'Longitude'),
+                    _buildGraph('Altitude GPS', gpsAltData, Colors.indigo, 'Altitude (m)'),
+                    _buildGraph('Velocidade', velData, Colors.cyan, 'Velocidade (m/s)'),
+                  ],
                 ],
               )
             else
@@ -274,6 +319,12 @@ class FlightData {
   List<FlSpot> azData;
   List<FlSpot> altData;
   List<FlSpot> aTotalData;
+  List<FlSpot> voltData;
+  List<FlSpot> latData;
+  List<FlSpot> lngData;
+  List<FlSpot> gpsAltData;
+  List<FlSpot> velData;
+  bool hasGpsData;
 
   FlightData({
     required this.name,
@@ -282,6 +333,12 @@ class FlightData {
     required this.azData,
     required this.altData,
     required this.aTotalData,
+    required this.voltData,
+    required this.latData,
+    required this.lngData,
+    required this.gpsAltData,
+    required this.velData,
+    required this.hasGpsData,
   });
 }
 
@@ -300,6 +357,7 @@ class FlightsListScreen extends StatelessWidget {
           final flight = flights[index];
           return ListTile(
             title: Text(flight.name),
+            subtitle: Text(flight.hasGpsData ? 'Com dados GPS' : 'Sem dados GPS'),
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -321,30 +379,46 @@ class FlightDetailsScreen extends StatelessWidget {
 
   Future<void> _exportFlightData() async {
     try {
-      String csvContent = "Tempo(ms),Aceleração X(g),Aceleração Y(g),Aceleração Z(g),Aceleração Total(g),Altitude(m)\n";
+      // Criar o conteúdo do CSV
+      String csvHeader = "Tempo(ms),Aceleração X(g),Aceleração Y(g),Aceleração Z(g),Aceleração Total(g),Altitude(m),Voltagem(V)";
       
-      int maxLength = flight.axData.length;
-      if (flight.ayData.length != maxLength || 
-          flight.azData.length != maxLength || 
-          flight.aTotalData.length != maxLength || 
-          flight.altData.length != maxLength) {
-        throw Exception("Os dados do voo têm tamanhos inconsistentes");
+      if (flight.hasGpsData) {
+        csvHeader += ",Latitude,Longitude,Altitude GPS(m),Velocidade(m/s)";
       }
       
+      String csvContent = "$csvHeader\n";
+      
+      // Verificar se todos os arrays têm o mesmo tamanho
+      int maxLength = flight.axData.length;
+      
+      // Adicionar os dados linha por linha
       for (int i = 0; i < maxLength; i++) {
-        csvContent += "${(flight.axData[i].x * 1000).toStringAsFixed(0)},"
+        String line = "${(flight.axData[i].x * 1000).toStringAsFixed(0)},"
                      "${flight.axData[i].y.toStringAsFixed(6)},"
                      "${flight.ayData[i].y.toStringAsFixed(6)},"
                      "${flight.azData[i].y.toStringAsFixed(6)},"
                      "${flight.aTotalData[i].y.toStringAsFixed(6)},"
-                     "${flight.altData[i].y.toStringAsFixed(2)}\n";
+                     "${flight.altData[i].y.toStringAsFixed(2)},"
+                     "${flight.voltData[i].y.toStringAsFixed(2)}";
+        
+        if (flight.hasGpsData) {
+          line += ",${flight.latData[i].y.toStringAsFixed(6)},"
+                  "${flight.lngData[i].y.toStringAsFixed(6)},"
+                  "${flight.gpsAltData[i].y.toStringAsFixed(2)},"
+                  "${flight.velData[i].y.toStringAsFixed(2)}";
+        }
+        
+        csvContent += "$line\n";
       }
       
+      // Obter diretório para salvar o arquivo temporariamente
       final directory = await getTemporaryDirectory();
       final file = File('${directory.path}/${flight.name}_dados.csv');
       
+      // Escrever no arquivo
       await file.writeAsString(csvContent);
       
+      // Compartilhar o arquivo usando share_plus
       await Share.shareXFiles(
         [XFile(file.path)],
         text: 'Dados do ${flight.name}',
@@ -357,6 +431,8 @@ class FlightDetailsScreen extends StatelessWidget {
   }
 
   Widget _buildGraph(String label, List<FlSpot> data, Color cor, String yAxisLabel) {
+    if (data.isEmpty) return SizedBox.shrink();
+    
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -431,6 +507,13 @@ class FlightDetailsScreen extends StatelessWidget {
             _buildGraph('Aceleração no eixo Z', flight.azData, Colors.green, 'Aceleração (g)'),
             _buildGraph('Aceleração Total', flight.aTotalData, Colors.purple, 'Aceleração (g)'),
             _buildGraph('Altitude', flight.altData, Colors.orange, 'Altitude (m)'),
+            _buildGraph('Voltagem', flight.voltData, Colors.brown, 'Voltagem (V)'),
+            if (flight.hasGpsData) ...[
+              _buildGraph('Latitude', flight.latData, Colors.pink, 'Latitude'),
+              _buildGraph('Longitude', flight.lngData, Colors.teal, 'Longitude'),
+              _buildGraph('Altitude GPS', flight.gpsAltData, Colors.indigo, 'Altitude (m)'),
+              _buildGraph('Velocidade', flight.velData, Colors.cyan, 'Velocidade (m/s)'),
+            ],
           ],
         ),
       ),
