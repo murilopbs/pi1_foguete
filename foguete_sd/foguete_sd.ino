@@ -43,7 +43,7 @@ Estado estado = AGUARDANDO_LANCAMENTO;
 
 // Parâmetros de detecção
 const float ACEL_LANCAMENTO = 15.0;
-const float ACEL_IMPACTO = 9.0;
+const float ACEL_IMPACTO = 45.0;
 const int INTERVALO_COLETA = 200;
 
 // Tempo
@@ -357,8 +357,8 @@ void enviarDadosDoCartaoSD() {
 void piscarErro() {
   while (true) {
     digitalWrite(LED, LOW);
-    delay(500);
+    delay(2000);
     digitalWrite(LED, HIGH);
-    delay(500);
+    delay(1000);
   }
 }
