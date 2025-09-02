@@ -1,0 +1,6 @@
+# Trata o HTML do runner da web como um template, não como código primário
+web/index.html linguist-documentation=true
+
+# Se você tiver arquivos gerados por código (build_runner, etc.)
+*.g.dart linguist-generated=true
+*.freezed.dart linguist-generated=true
